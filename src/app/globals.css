@@ -1,0 +1,110 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Inter font from Google Fonts */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap");
+
+:root {
+  --background: #f6f8fb;
+  --foreground: #0f172a;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+}
+
+/* Header gradient — deep, authoritative navy */
+.hero-gradient {
+  background: linear-gradient(160deg, #0b1929 0%, #0f2744 40%, #122f52 100%);
+}
+
+/* Premium card base */
+.card {
+  @apply bg-white rounded-2xl border border-gray-100/80;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+/* Card lift on hover */
+.card-interactive {
+  transition: box-shadow 0.25s ease, transform 0.25s ease, border-color 0.25s ease;
+}
+.card-interactive:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
+  transform: translateY(-1px);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+/* Result entrance animation */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in {
+  animation: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.animate-fade-in-delay-1 {
+  animation: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.08s forwards;
+  opacity: 0;
+}
+.animate-fade-in-delay-2 {
+  animation: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.16s forwards;
+  opacity: 0;
+}
+.animate-fade-in-delay-3 {
+  animation: fadeInUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.24s forwards;
+  opacity: 0;
+}
+
+/* Subtle pulse for the CTA button */
+@keyframes subtlePulse {
+  0%, 100% { box-shadow: 0 4px 14px rgba(12, 128, 235, 0.25); }
+  50% { box-shadow: 0 4px 20px rgba(12, 128, 235, 0.4); }
+}
+.btn-pulse {
+  animation: subtlePulse 2.5s ease-in-out infinite;
+}
+
+/* Section label styling */
+.section-label {
+  @apply text-[11px] font-semibold uppercase tracking-widest text-gray-400;
+  letter-spacing: 0.08em;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Remove number input spinners for cleaner look */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* Focus ring consistency */
+.focus-ring {
+  @apply focus:outline-none focus:ring-2 focus:ring-brand-200/60 focus:border-brand-300;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
