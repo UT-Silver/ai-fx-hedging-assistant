@@ -18,6 +18,7 @@ export const PRESETS: Preset[] = [
       timeHorizon: "3m",
       riskTolerance: "low",
       goal: "budget_certainty",
+      certainty: "confirmed",
     },
   },
   {
@@ -31,6 +32,7 @@ export const PRESETS: Preset[] = [
       timeHorizon: "6m",
       riskTolerance: "medium",
       goal: "downside_protection",
+      certainty: "confirmed",
     },
   },
   {
@@ -44,6 +46,21 @@ export const PRESETS: Preset[] = [
       timeHorizon: "12m",
       riskTolerance: "medium",
       goal: "flexibility",
+      certainty: "forecast",
     },
   },
 ];
+
+// Sample case used by the "Load Sample Case" button — matches the spec.
+export const SAMPLE_CASE: ExposureInput = {
+  baseCurrency: "USD",
+  foreignCurrency: "EUR",
+  amount: 1_000_000,
+  direction: "paying",
+  timeHorizon: "6m",
+  riskTolerance: "medium",
+  goal: "budget_certainty",
+  certainty: "confirmed",
+  spotRate: 1.08,
+  forwardRate: 1.09,
+};

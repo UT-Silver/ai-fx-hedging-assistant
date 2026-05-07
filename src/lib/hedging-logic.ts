@@ -1,147 +1,188 @@
 import {
+  ExposureCertainty,
   ExposureInput,
-  HedgingRecommendation,
   RiskTolerance,
+  StrategyKey,
+  StrategyProfile,
   UserGoal,
 } from "./types";
 
-// Deterministic recommendation engine
-// Maps (riskTolerance, goal, direction) → strategy + hedge ratio
+// ---------------------------------------------------------------------------
+// Strategy catalogue — content used by the "Strategy Comparison" step.
+// Numeric levels (1–5) drive the visual indicators in the strategy cards.
+// ---------------------------------------------------------------------------
 
-interface StrategyProfile {
-  strategy: string;
-  hedgeRatio: number;
-  rationale: string;
-  tradeoffs: string;
-  badge?: string;
-}
-
-const STRATEGY_MAP: Record<
-  RiskTolerance,
-  Record<UserGoal, StrategyProfile>
-> = {
-  low: {
-    budget_certainty: {
-      strategy: "Full Forward Hedge",
-      hedgeRatio: 100,
-      rationale:
-        "A forward contract locks in today's rate for the full exposure amount, eliminating FX uncertainty entirely. This is the standard approach for treasury teams that prioritize predictable cash flows.",
-      tradeoffs:
-        "You give up all potential benefit if the exchange rate moves in your favor. The cost is fully locked.",
-      badge: "Recommended for risk-averse treasurers",
-    },
-    downside_protection: {
-      strategy: "Forward Hedge",
-      hedgeRatio: 100,
-      rationale:
-        "With low risk tolerance and a focus on downside protection, a full forward hedge provides the strongest shield against adverse currency moves.",
-      tradeoffs:
-        "No upside participation. If the market moves favorably, you won't benefit.",
-      badge: "Maximum protection",
-    },
-    flexibility: {
-      strategy: "Protective Option Strategy",
-      hedgeRatio: 90,
-      rationale:
-        "Even with a preference for flexibility, low risk tolerance suggests covering most of the exposure. A currency option protects against downside while preserving some upside.",
-      tradeoffs:
-        "Options carry a premium cost. The hedge is slightly less than 100% to allow minor flexibility.",
-    },
-    unsure: {
-      strategy: "Forward Hedge",
-      hedgeRatio: 100,
-      rationale:
-        "When goals are unclear but risk tolerance is low, the safest approach is to lock in certainty with a full forward hedge. You can always adjust in future periods.",
-      tradeoffs:
-        "Eliminates FX risk but also eliminates potential gains from favorable moves.",
-      badge: "Safe default",
-    },
+export const STRATEGIES: Record<StrategyKey, StrategyProfile> = {
+  forward: {
+    key: "forward",
+    name: "Forward Hedge",
+    oneLine: "Lock in today's rate for a fixed future date.",
+    protection: 5,
+    flexibility: 1,
+    cost: "low",
+    bestUseCase:
+      "Confirmed cash flows where budget certainty matters more than upside.",
+    description:
+      "A forward contract fixes the exchange rate now for settlement on a future date. The cash-flow value is fully determined — no surprises in either direction.",
+    pros: [
+      "Maximum certainty on the hedged amount",
+      "No upfront premium to pay",
+      "Simple to execute and book",
+    ],
+    cons: [
+      "No participation if FX moves in your favor",
+      "Rolling or unwinding has cost if the cash flow shifts",
+      "Locks capital usage with the bank line",
+    ],
   },
-  medium: {
-    budget_certainty: {
-      strategy: "Partial Forward Hedge",
-      hedgeRatio: 75,
-      rationale:
-        "Hedging 75% of the exposure locks in the majority of your budget while leaving a portion open to benefit from favorable moves.",
-      tradeoffs:
-        "25% of the exposure remains unhedged and subject to market fluctuations.",
-    },
-    downside_protection: {
-      strategy: "Vanilla Option Hedge",
-      hedgeRatio: 75,
-      rationale:
-        "A currency option provides downside protection while allowing participation in favorable moves. Suitable for medium risk tolerance focused on avoiding worst-case outcomes.",
-      tradeoffs:
-        "Options require an upfront premium, which increases the total cost of hedging. The premium is non-refundable.",
-      badge: "Balanced approach",
-    },
-    flexibility: {
-      strategy: "Partial Hedge with Monitoring",
-      hedgeRatio: 50,
-      rationale:
-        "Hedging half the exposure provides a safety net while keeping significant flexibility. A layered approach lets you add more hedges if the market turns unfavorable.",
-      tradeoffs:
-        "50% of the exposure remains at risk. Requires ongoing market monitoring to manage the open portion.",
-    },
-    unsure: {
-      strategy: "Partial Forward Hedge",
-      hedgeRatio: 60,
-      rationale:
-        "A moderate hedge covers the majority of downside risk while preserving optionality. This is a sensible middle ground when objectives aren't fully defined.",
-      tradeoffs:
-        "40% of the exposure is unhedged. You may wish to revisit as your objectives become clearer.",
-    },
+  option: {
+    key: "option",
+    name: "Currency Option",
+    oneLine: "Buy protection but keep the upside.",
+    protection: 3,
+    flexibility: 5,
+    cost: "high",
+    bestUseCase:
+      "When the upside matters and the cash flow is real but not yet contracted.",
+    description:
+      "A vanilla option gives the right — but not the obligation — to exchange at a chosen strike. You pay an upfront premium and walk away from the option if the market moves your way.",
+    pros: [
+      "Downside protection with full upside participation",
+      "Right, not obligation — useful when timing is uncertain",
+      "Can be tailored on strike, tenor and notional",
+    ],
+    cons: [
+      "Premium is a real, non-refundable cost",
+      "Premium pricing depends on volatility and tenor",
+      "Some treasuries need internal approval to use derivatives with premium",
+    ],
   },
-  high: {
-    budget_certainty: {
-      strategy: "Light Hedge with Active Monitoring",
-      hedgeRatio: 25,
-      rationale:
-        "Even with high risk tolerance, some budget certainty can be achieved by hedging a small portion. The remaining exposure is managed through active monitoring.",
-      tradeoffs:
-        "75% unhedged — significant exposure to adverse moves. Requires discipline to act if the market moves sharply against you.",
-    },
-    downside_protection: {
-      strategy: "Out-of-the-Money Option",
-      hedgeRatio: 50,
-      rationale:
-        "An out-of-the-money option provides catastrophic protection at lower premium cost, fitting a high risk tolerance while still guarding against tail risk.",
-      tradeoffs:
-        "Protection only kicks in after a significant adverse move. Day-to-day fluctuations are fully absorbed.",
-    },
-    flexibility: {
-      strategy: "No Immediate Hedge — Monitor",
-      hedgeRatio: 0,
-      rationale:
-        "With high risk tolerance and a preference for flexibility, staying unhedged maximizes optionality. Set trigger levels to add hedges if the market moves beyond your comfort zone.",
-      tradeoffs:
-        "Full exposure to FX risk. Gains and losses flow through entirely. This approach requires active attention.",
-    },
-    unsure: {
-      strategy: "Light Tactical Hedge",
-      hedgeRatio: 25,
-      rationale:
-        "A small hedge provides a token level of protection while you determine your goals. This can be scaled up or unwound as your strategy becomes clearer.",
-      tradeoffs:
-        "Most of the exposure is open. This is essentially a wait-and-see approach with a small safety net.",
-    },
+  collar: {
+    key: "collar",
+    name: "Collar",
+    oneLine: "Protected on the downside, capped on the upside — often zero-cost.",
+    protection: 4,
+    flexibility: 3,
+    cost: "low",
+    bestUseCase:
+      "When you want option-like protection but cannot or will not pay a premium.",
+    description:
+      "A collar combines a bought option (protection) with a sold option (cap). Premiums offset, often producing a zero or near-zero net cost. You give up extreme upside to fund downside protection.",
+    pros: [
+      "Low or zero net premium",
+      "Defines a clear range for the future rate",
+      "Cleaner accounting story than a naked option",
+    ],
+    cons: [
+      "Upside is capped at the sold strike",
+      "More moving parts to explain to stakeholders",
+      "Margin or credit requirements on the sold leg",
+    ],
+  },
+  layered: {
+    key: "layered",
+    name: "Layered Hedge",
+    oneLine: "Hedge in tranches over time to reduce timing risk.",
+    protection: 4,
+    flexibility: 4,
+    cost: "low",
+    bestUseCase:
+      "Forecast or recurring exposures where timing of cash flows is uncertain.",
+    description:
+      "Instead of a single transaction, the exposure is hedged in steps — for example 30% now, 30% in two months, the rest closer to settlement. This averages the entry rate and softens the impact of being wrong on timing.",
+    pros: [
+      "Reduces the risk of hedging at a bad single moment",
+      "Naturally fits recurring or forecast exposures",
+      "Easy to ramp up or pause as forecasts firm up",
+    ],
+    cons: [
+      "More operational steps to track",
+      "Average rate may underperform a perfect single-shot trade",
+      "Requires a policy on tranche size and triggers",
+    ],
   },
 };
 
-export function getRecommendation(input: ExposureInput): HedgingRecommendation {
-  const profile = STRATEGY_MAP[input.riskTolerance][input.goal];
+export const STRATEGY_ORDER: StrategyKey[] = [
+  "forward",
+  "option",
+  "collar",
+  "layered",
+];
 
-  // Adjust rationale wording based on direction
-  const directionNote =
-    input.direction === "paying"
-      ? "Since you are paying in foreign currency, adverse moves mean the foreign currency strengthening (costing you more in your base currency)."
-      : "Since you are receiving foreign currency, adverse moves mean the foreign currency weakening (reducing the value you receive in your base currency).";
+// ---------------------------------------------------------------------------
+// Recommended hedge-ratio engine.
+// Inputs: risk tolerance, goal, exposure certainty, time horizon.
+// Output: a target ratio in [0, 100]. The user can override via the slider.
+// ---------------------------------------------------------------------------
 
-  return {
-    strategy: profile.strategy,
-    hedgeRatio: profile.hedgeRatio,
-    rationale: `${profile.rationale}\n\n${directionNote}`,
-    tradeoffs: profile.tradeoffs,
-    badge: profile.badge,
-  };
+const RISK_BASE: Record<RiskTolerance, number> = {
+  low: 90,
+  medium: 60,
+  high: 25,
+};
+
+const GOAL_ADJ: Record<UserGoal, number> = {
+  budget_certainty: 10,
+  downside_protection: 5,
+  flexibility: -15,
+  unsure: 0,
+};
+
+const CERTAINTY_ADJ: Record<ExposureCertainty, number> = {
+  confirmed: 5,
+  forecast: -5,
+  uncertain: -15,
+};
+
+export function recommendHedgeRatio(input: ExposureInput): number {
+  const raw =
+    RISK_BASE[input.riskTolerance] +
+    GOAL_ADJ[input.goal] +
+    CERTAINTY_ADJ[input.certainty];
+  return Math.max(0, Math.min(100, Math.round(raw / 5) * 5));
+}
+
+// Recommended strategy: derived from the same drivers.
+// Forward = full certainty; Option = preserve upside; Collar = balanced w/o premium;
+// Layered = uncertain timing or forecast cash flow.
+export function recommendStrategy(input: ExposureInput): StrategyKey {
+  if (input.certainty === "uncertain") return "layered";
+  if (input.certainty === "forecast" && input.riskTolerance !== "low")
+    return "layered";
+
+  if (input.goal === "flexibility") {
+    return input.riskTolerance === "high" ? "option" : "collar";
+  }
+  if (input.goal === "downside_protection") {
+    return input.riskTolerance === "high" ? "option" : "collar";
+  }
+  // budget certainty / unsure with confirmed cash flow
+  return "forward";
+}
+
+// ---------------------------------------------------------------------------
+// Risk diagnosis — converts the inputs into a human-readable summary plus a
+// pre-hedge / post-hedge risk level used by the risk meter.
+// ---------------------------------------------------------------------------
+
+export function classifyRiskLevel(
+  hedgeRatio: number,
+  riskTolerance: RiskTolerance,
+  certainty: ExposureCertainty,
+  timeHorizon: string
+): "low" | "medium" | "high" {
+  // Higher hedge ratio -> lower residual risk
+  // Lower certainty + longer horizon -> higher base risk
+  let score = 0;
+  score += (100 - hedgeRatio) / 20; // 0 at full hedge, 5 at unhedged
+  if (riskTolerance === "low") score += 0.5;
+  if (certainty === "forecast") score += 1;
+  if (certainty === "uncertain") score += 2;
+  if (timeHorizon === "6m") score += 0.5;
+  if (timeHorizon === "12m") score += 1;
+
+  if (score >= 4) return "high";
+  if (score >= 2) return "medium";
+  return "low";
 }

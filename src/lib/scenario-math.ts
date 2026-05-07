@@ -1,6 +1,7 @@
-import { ExposureInput, HedgingRecommendation, ScenarioResult } from "./types";
+import { ExposureInput, ScenarioResult, DistributionRange } from "./types";
 
-// Illustrative spot rates for demo purposes (vs USD)
+// Illustrative spot rates for demo purposes.
+// Pairs are stored as BASE/QUOTE — e.g. EURUSD = 1.085 means 1 EUR = 1.085 USD.
 const SPOT_RATES: Record<string, number> = {
   EURUSD: 1.085,
   GBPUSD: 1.265,
@@ -9,82 +10,159 @@ const SPOT_RATES: Record<string, number> = {
   USDCHF: 0.883,
   USDCAD: 1.365,
   AUDUSD: 0.655,
+  EURGBP: 0.858,
+  EURJPY: 167.6,
+  GBPJPY: 195.4,
 };
 
-function getSpotRate(base: string, foreign: string): number {
-  // Try direct pair
-  const direct = SPOT_RATES[`${base}${foreign}`];
+export function getSpotRate(base: string, foreign: string): number {
+  // Direct pair (e.g. base=USD, foreign=EUR -> USDEUR)
+  // Our lookup is in market convention so we try both directions.
+  const direct = SPOT_RATES[`${foreign}${base}`]; // e.g. EURUSD when base=USD, foreign=EUR
   if (direct) return direct;
-  // Try inverse
-  const inverse = SPOT_RATES[`${foreign}${base}`];
+  const inverse = SPOT_RATES[`${base}${foreign}`]; // e.g. USDJPY when base=USD, foreign=JPY
   if (inverse) return 1 / inverse;
-  // Default illustrative rate
   return 1.0;
 }
 
-const SCENARIO_MOVES = [
-  { label: "Favorable Move", fxMove: -5 },
-  { label: "No Change", fxMove: 0 },
-  { label: "Adverse Move", fxMove: 5 },
-];
+// A simple forward = spot * (1 + carry). Carry is illustrative only — real
+// forward points come from interest-rate differentials and can be in either
+// direction. We use a small horizon-dependent adjustment so the forward rate
+// in the demo doesn't equal spot exactly.
+export function getForwardRate(
+  base: string,
+  foreign: string,
+  timeHorizon: string,
+  override?: number
+): number {
+  if (override !== undefined) return override;
+  const spot = getSpotRate(base, foreign);
+  const monthsMap: Record<string, number> = { "1m": 1, "3m": 3, "6m": 6, "12m": 12 };
+  const m = monthsMap[timeHorizon] ?? 3;
+  // 0.4% annualized carry — purely illustrative
+  const carry = 0.004 * (m / 12);
+  return spot * (1 + carry);
+}
 
-export function computeScenarios(
+// ---------------------------------------------------------------------------
+// Scenario for a specific FX shock (used by the slider in Step 4).
+// fxMovePct is the % move of the FOREIGN currency vs BASE.
+//   +5 means foreign currency appreciates 5% (bad for payers, good for receivers)
+// ---------------------------------------------------------------------------
+
+export function computeShockScenario(
   input: ExposureInput,
-  rec: HedgingRecommendation
-): ScenarioResult[] {
-  const spotRate = getSpotRate(input.baseCurrency, input.foreignCurrency);
-  const hedgeRatio = rec.hedgeRatio / 100;
+  hedgeRatio: number,
+  fxMovePct: number
+): ScenarioResult {
+  const spot = input.spotRate ?? getSpotRate(input.baseCurrency, input.foreignCurrency);
+  const forward = input.forwardRate ?? getForwardRate(input.baseCurrency, input.foreignCurrency, input.timeHorizon);
+  const ratio = hedgeRatio / 100;
   const isPaying = input.direction === "paying";
 
-  return SCENARIO_MOVES.map(({ label, fxMove }) => {
-    // A positive fxMove means the foreign currency strengthens vs base
-    // For payer: strengthening foreign = higher cost (adverse)
-    // For receiver: strengthening foreign = higher value received (favorable)
-    // We flip the sign for receivers so "Adverse" is always bad for the user
-    const effectiveMove = isPaying ? fxMove : -fxMove;
-    const moveMultiplier = 1 + effectiveMove / 100;
+  // Each unit of foreign currency now costs (or yields) spot * (1 + move).
+  const futureSpot = spot * (1 + fxMovePct / 100);
 
-    // Cost/value in base currency terms
-    const baseAmount = input.amount; // exposure is in foreign currency
-    const unhedgedCost = baseAmount * spotRate * moveMultiplier;
-    const lockedCost = baseAmount * spotRate; // hedged portion at current rate
+  // Unhedged: full exposure converted at the future spot.
+  const unhedgedCost = input.amount * futureSpot;
+  // Hedged portion: locked at the forward rate (what you would have booked today).
+  // Unhedged portion: floats at future spot.
+  const hedgedCost =
+    ratio * input.amount * forward + (1 - ratio) * input.amount * futureSpot;
 
-    // Blended: hedged portion at locked rate + unhedged portion at scenario rate
-    const hedgedCost =
-      hedgeRatio * lockedCost + (1 - hedgeRatio) * unhedgedCost;
+  // For a payer, "savings" = unhedged minus hedged when adverse (positive value).
+  // For a receiver, the adverse direction is foreign currency *down*, so flip.
+  const savings = isPaying
+    ? unhedgedCost - hedgedCost
+    : hedgedCost - unhedgedCost;
 
-    const savings = unhedgedCost - hedgedCost;
+  const moveAbs = Math.abs(fxMovePct);
+  const moveDir = fxMovePct > 0 ? "appreciates" : fxMovePct < 0 ? "depreciates" : "is flat";
+  const isAdverse = (isPaying && fxMovePct > 0) || (!isPaying && fxMovePct < 0);
+  const isFavorable = (isPaying && fxMovePct < 0) || (!isPaying && fxMovePct > 0);
 
-    // Build narrative
-    let narrative: string;
-    if (fxMove === 0) {
-      narrative = `At current rates, your ${isPaying ? "cost" : "receivable"} is approximately ${formatCurrency(unhedgedCost, input.baseCurrency)}.`;
-    } else if ((fxMove > 0 && isPaying) || (fxMove < 0 && !isPaying)) {
-      // Adverse scenario
-      narrative =
-        hedgeRatio > 0
-          ? `In an adverse move, the hedge saves you approximately ${formatCurrency(Math.abs(savings), input.baseCurrency)} compared to being fully unhedged.`
-          : `Without a hedge, an adverse ${Math.abs(fxMove)}% move increases your ${isPaying ? "cost" : "loss"} by ${formatCurrency(Math.abs(unhedgedCost - baseAmount * spotRate), input.baseCurrency)}.`;
-    } else {
-      // Favorable scenario
-      narrative =
-        hedgeRatio > 0
-          ? `In a favorable move, the hedge limits your benefit by ${formatCurrency(Math.abs(savings), input.baseCurrency)} — the cost of certainty.`
-          : `Without a hedge, you fully benefit from this favorable ${Math.abs(fxMove)}% move.`;
-    }
+  let narrative: string;
+  if (fxMovePct === 0) {
+    narrative = `At today's rate, your ${isPaying ? "cost" : "receivable value"} is approximately ${fmt(unhedgedCost, input.baseCurrency)}.`;
+  } else if (isAdverse && ratio > 0) {
+    narrative = `If ${input.foreignCurrency} ${moveDir} ${moveAbs.toFixed(1)}%, an unhedged position would ${isPaying ? "cost" : "lose"} ${fmt(Math.abs(unhedgedCost), input.baseCurrency)}. With a ${Math.round(hedgeRatio)}% hedge the outcome is ${fmt(Math.abs(hedgedCost), input.baseCurrency)} — ${fmt(Math.abs(savings), input.baseCurrency)} of damage avoided.`;
+  } else if (isAdverse) {
+    narrative = `Without any hedge, a ${moveAbs.toFixed(1)}% adverse move ${isPaying ? "increases your cost" : "reduces your receivable"} to ${fmt(Math.abs(unhedgedCost), input.baseCurrency)}.`;
+  } else if (isFavorable && ratio > 0) {
+    narrative = `${input.foreignCurrency} ${moveDir} ${moveAbs.toFixed(1)}% — favorable for you. The hedge gives up about ${fmt(Math.abs(savings), input.baseCurrency)} of upside, the cost of certainty.`;
+  } else {
+    narrative = `${input.foreignCurrency} ${moveDir} ${moveAbs.toFixed(1)}% — favorable. With no hedge the full benefit flows through.`;
+  }
 
-    return {
-      label,
-      fxMove,
-      unhedgedCost: Math.round(unhedgedCost),
-      hedgedCost: Math.round(hedgedCost),
-      savings: Math.round(savings),
-      narrative,
-    };
+  return {
+    label: `${fxMovePct > 0 ? "+" : ""}${fxMovePct.toFixed(1)}% move`,
+    fxMove: fxMovePct,
+    futureSpot,
+    unhedgedCost: Math.round(unhedgedCost),
+    hedgedCost: Math.round(hedgedCost),
+    savings: Math.round(savings),
+    narrative,
+  };
+}
+
+// Convenience: classic 3-scenario set for the summary card.
+export function computeScenarios(
+  input: ExposureInput,
+  hedgeRatio: number
+): ScenarioResult[] {
+  const moves = [
+    { label: "Favorable", fxMove: input.direction === "paying" ? -5 : +5 },
+    { label: "Base", fxMove: 0 },
+    { label: "Adverse", fxMove: input.direction === "paying" ? +5 : -5 },
+  ];
+  return moves.map(({ label, fxMove }) => {
+    const s = computeShockScenario(input, hedgeRatio, fxMove);
+    return { ...s, label };
   });
 }
 
-function formatCurrency(amount: number, currency: string): string {
+// ---------------------------------------------------------------------------
+// Outcome distribution — used by the "Before vs After" chart.
+// We assume an illustrative ±10% range for the unhedged distribution and
+// scale the hedged range linearly with the hedge ratio.
+// ---------------------------------------------------------------------------
+
+export function computeOutcomeRange(
+  input: ExposureInput,
+  hedgeRatio: number,
+  shockPct = 10
+): { unhedged: DistributionRange; hedged: DistributionRange } {
+  const spot = input.spotRate ?? getSpotRate(input.baseCurrency, input.foreignCurrency);
+  const forward = input.forwardRate ?? getForwardRate(input.baseCurrency, input.foreignCurrency, input.timeHorizon);
+  const ratio = hedgeRatio / 100;
+
+  const baseValue = input.amount * spot;
+  const lockedValue = ratio * input.amount * forward;
+  const floatNotional = (1 - ratio) * input.amount;
+
+  const lowSpot = spot * (1 - shockPct / 100);
+  const highSpot = spot * (1 + shockPct / 100);
+
+  const unhedgedLow = input.amount * lowSpot;
+  const unhedgedHigh = input.amount * highSpot;
+  const hedgedLow = lockedValue + floatNotional * lowSpot;
+  const hedgedHigh = lockedValue + floatNotional * highSpot;
+
+  return {
+    unhedged: {
+      low: Math.round(unhedgedLow),
+      high: Math.round(unhedgedHigh),
+      mid: Math.round(baseValue),
+    },
+    hedged: {
+      low: Math.round(hedgedLow),
+      high: Math.round(hedgedHigh),
+      mid: Math.round(lockedValue + floatNotional * spot),
+    },
+  };
+}
+
+function fmt(amount: number, currency: string): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,

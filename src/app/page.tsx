@@ -1,16 +1,33 @@
 "use client";
 
-import { useState } from "react";
-import Header from "@/components/Header";
-import ExposureForm from "@/components/ExposureForm";
-import RecommendationCard from "@/components/RecommendationCard";
-import ScenarioAnalysis from "@/components/ScenarioAnalysis";
-import AIExplanation from "@/components/AIExplanation";
-import Disclaimer from "@/components/Disclaimer";
-import { ExposureInput, AnalysisOutput } from "@/lib/types";
-import { getRecommendation } from "@/lib/hedging-logic";
-import { computeScenarios } from "@/lib/scenario-math";
-import { generateMockExplanation } from "@/lib/explanation-generator";
+import { useMemo, useState, useEffect, useRef } from "react";
+import {
+  ExposureInput,
+  RecommendationContext,
+  StrategyKey,
+  ExplainMode,
+} from "@/lib/types";
+import {
+  recommendStrategy,
+  recommendHedgeRatio,
+} from "@/lib/hedging-logic";
+import { diagnoseRisk } from "@/lib/risk-diagnosis";
+import {
+  computeScenarios,
+  getSpotRate,
+  getForwardRate,
+} from "@/lib/scenario-math";
+import Hero from "@/components/Hero";
+import NarrativeSections from "@/components/NarrativeSections";
+import StickyProgress from "@/components/workflow/StickyProgress";
+import Step1Exposure from "@/components/workflow/Step1Exposure";
+import Step2RiskDiagnosis from "@/components/workflow/Step2RiskDiagnosis";
+import Step3StrategyComparison from "@/components/workflow/Step3StrategyComparison";
+import Step4Scenario from "@/components/workflow/Step4Scenario";
+import Step5HedgeRatio from "@/components/workflow/Step5HedgeRatio";
+import Step6Memo from "@/components/workflow/Step6Memo";
+import DashboardCards from "@/components/workflow/DashboardCards";
+import { SAMPLE_CASE } from "@/data/presets";
 
 const DEFAULT_INPUT: ExposureInput = {
   baseCurrency: "USD",
@@ -20,132 +37,164 @@ const DEFAULT_INPUT: ExposureInput = {
   timeHorizon: "3m",
   riskTolerance: "medium",
   goal: "budget_certainty",
+  certainty: "confirmed",
 };
 
 export default function Home() {
   const [input, setInput] = useState<ExposureInput>(DEFAULT_INPUT);
-  const [result, setResult] = useState<AnalysisOutput | null>(null);
+  const [analyzed, setAnalyzed] = useState(false);
+  const [selectedStrategy, setSelectedStrategy] = useState<StrategyKey>("forward");
+  const [hedgeRatio, setHedgeRatio] = useState(75);
+  const [explainMode, setExplainMode] = useState<ExplainMode>("cfo");
+
+  const workflowRef = useRef<HTMLDivElement>(null);
+
+  // Build the recommendation context whenever any input changes. This runs
+  // even when not "analyzed" so the workflow stays consistent — but the
+  // workflow sections only render after the user clicks "Run analysis".
+  const ctx: RecommendationContext = useMemo(() => {
+    const spotRate =
+      input.spotRate ?? getSpotRate(input.baseCurrency, input.foreignCurrency);
+    const forwardRate = getForwardRate(
+      input.baseCurrency,
+      input.foreignCurrency,
+      input.timeHorizon,
+      input.forwardRate
+    );
+    const recommendedRatio = recommendHedgeRatio(input);
+    const recommendedStrategy = recommendStrategy(input);
+    const diagnosis = diagnoseRisk(input, hedgeRatio);
+    const scenarios = computeScenarios(input, hedgeRatio);
+
+    return {
+      input,
+      spotRate,
+      forwardRate,
+      selectedStrategy,
+      hedgeRatio,
+      recommendedRatio,
+      recommendedStrategy,
+      diagnosis,
+      scenarios,
+    };
+  }, [input, selectedStrategy, hedgeRatio]);
 
   const handleAnalyze = () => {
-    const recommendation = getRecommendation(input);
-    const scenarios = computeScenarios(input, recommendation);
-    const explanation = generateMockExplanation(
-      input,
-      recommendation,
-      scenarios
-    );
-    setResult({ recommendation, scenarios, explanation });
+    // Snap selected strategy + ratio to the engine recommendation on first run.
+    const recRatio = recommendHedgeRatio(input);
+    const recStrat = recommendStrategy(input);
+    setSelectedStrategy(recStrat);
+    setHedgeRatio(recRatio);
+    setAnalyzed(true);
+    // Scroll to the workflow start.
+    setTimeout(() => {
+      const el = document.getElementById("step-2");
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 60);
   };
 
   const handleReset = () => {
     setInput(DEFAULT_INPUT);
-    setResult(null);
+    setAnalyzed(false);
+    setHedgeRatio(75);
+    setSelectedStrategy("forward");
+    setExplainMode("cfo");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleSample = () => {
+    setInput(SAMPLE_CASE);
+    setSelectedStrategy(recommendStrategy(SAMPLE_CASE));
+    setHedgeRatio(recommendHedgeRatio(SAMPLE_CASE));
+    setAnalyzed(true);
+    setTimeout(() => {
+      const el = document.getElementById("step-1");
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 60);
+  };
+
+  const startAnalysis = () => {
+    const el = document.getElementById("step-1");
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#f6f8fb]">
-      <Header />
+    <div className="min-h-screen bg-ink-950 text-white">
+      <Hero onStart={startAnalysis} onSample={handleSample} />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-5 sm:px-8 py-7 sm:py-10">
-        {/* Product framing banner */}
-        <div className="mb-8 rounded-xl bg-white border border-gray-100/80 shadow-card px-5 py-4">
+      <NarrativeSections />
+
+      {analyzed && <StickyProgress />}
+
+      <div ref={workflowRef}>
+        <Step1Exposure
+          input={input}
+          onChange={setInput}
+          onAnalyze={handleAnalyze}
+          onReset={handleReset}
+        />
+
+        {analyzed && (
+          <>
+            <DashboardCards ctx={ctx} />
+            <Step2RiskDiagnosis ctx={ctx} />
+            <Step3StrategyComparison
+              selected={selectedStrategy}
+              recommended={ctx.recommendedStrategy}
+              onSelect={setSelectedStrategy}
+            />
+            <Step4Scenario
+              ctx={ctx}
+              mode={explainMode}
+              onChangeMode={setExplainMode}
+            />
+            <Step5HedgeRatio ctx={ctx} onChangeRatio={setHedgeRatio} />
+            <Step6Memo ctx={ctx} />
+          </>
+        )}
+      </div>
+
+      <Footer />
+    </div>
+  );
+}
+
+function Footer() {
+  return (
+    <footer className="section-dark border-t border-white/5">
+      <div className="max-w-7xl mx-auto px-6 sm:px-10 py-10">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-brand-50 border border-brand-100 flex items-center justify-center flex-shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/10 flex items-center justify-center">
               <svg
-                className="w-4 h-4 text-brand-600"
-                fill="none"
                 viewBox="0 0 24 24"
+                fill="none"
                 stroke="currentColor"
-                strokeWidth={2}
+                strokeWidth={1.8}
+                className="w-4 h-4 text-accent-400"
               >
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18"
+                  d="M3 17l4-4 4 4 6-6 4 4M3 7h6m6 0h6"
                 />
               </svg>
             </div>
-            <p className="text-[13px] text-gray-600 leading-relaxed">
-              FX hedging support used to require specialist knowledge,
-              spreadsheets, and bank interaction.{" "}
-              <span className="font-medium text-gray-800">
-                This MVP shows how AI can turn that workflow into a simple
-                interactive interface.
-              </span>
-            </p>
-          </div>
-        </div>
-
-        <div className="grid lg:grid-cols-[400px_1fr] gap-7">
-          {/* Left column — form */}
-          <div className="lg:sticky lg:top-8 lg:self-start">
-            <ExposureForm
-              input={input}
-              onChange={setInput}
-              onAnalyze={handleAnalyze}
-              onReset={handleReset}
-            />
-          </div>
-
-          {/* Right column — results */}
-          <div className="space-y-6">
-            {!result ? (
-              <div className="flex items-center justify-center h-80 rounded-2xl border-2 border-dashed border-gray-200/60 bg-white/40">
-                <div className="text-center">
-                  <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
-                    <svg
-                      className="w-6 h-6 text-gray-300"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={1.5}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5m.75-9l3-3 2.148 2.148A12.061 12.061 0 0116.5 7.605"
-                      />
-                    </svg>
-                  </div>
-                  <p className="text-[13px] text-gray-400 font-medium">
-                    Configure your exposure parameters
-                  </p>
-                  <p className="text-[12px] text-gray-300 mt-1">
-                    Click &ldquo;Generate Strategy&rdquo; to see analysis
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <>
-                <RecommendationCard recommendation={result.recommendation} />
-                <ScenarioAnalysis
-                  scenarios={result.scenarios}
-                  baseCurrency={input.baseCurrency}
-                />
-                <AIExplanation explanation={result.explanation} />
-                <Disclaimer />
-              </>
-            )}
-          </div>
-        </div>
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-gray-100/80 py-5 mt-auto">
-        <div className="max-w-7xl mx-auto px-5 sm:px-8 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded bg-gray-100 flex items-center justify-center">
-              <span className="text-[8px] font-bold text-gray-400">FX</span>
+            <div>
+              <p className="text-[13px] font-semibold text-white">
+                Treasury<span className="text-accent-400">.</span>Copilot
+              </p>
+              <p className="text-[11px] text-white/40">
+                AI FX Hedging Assistant — pre-trade decision tool
+              </p>
             </div>
-            <p className="text-[11px] text-gray-400 font-medium">
-              AI FX Hedging Assistant
-            </p>
           </div>
-          <p className="text-[11px] text-gray-400">
-            For educational use only. Not financial advice.
+          <p className="text-[11px] text-white/40 max-w-md sm:text-right leading-relaxed">
+            Educational demo. Not financial advice. All scenarios use simplified
+            assumptions and illustrative exchange rates.
           </p>
         </div>
-      </footer>
-    </div>
+      </div>
+    </footer>
   );
 }
